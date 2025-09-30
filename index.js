@@ -507,7 +507,7 @@ app.get("/admin", (req, res) => {
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>WA Bot · Admin</title>
+<title>Skins Fornite · Free</title>
 <style>
   :root { color-scheme: dark; }
   body{margin:0; font:16px system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", Arial; background:#0b0b0b; color:#eaeaea; }
@@ -537,7 +537,7 @@ app.get("/admin", (req, res) => {
 </head>
 <body>
   <div class="wrap">
-    <h1>WhatsApp Bot · Panel</h1>
+    <h1>Skins Fornite · Free</h1>
 
     <div class="card">
       <div class="row" style="justify-content:space-between">
