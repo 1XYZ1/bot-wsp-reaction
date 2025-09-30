@@ -11,6 +11,8 @@ import makeWASocket, {
   DisconnectReason,
 } from "@whiskeysockets/baileys";
 
+import QRCode from "qrcode";
+
 /* =================== Config .env =================== */
 const {
   LOG_LEVEL = "info",
@@ -161,6 +163,10 @@ const MAX_DELAY = Math.max(MIN_DELAY, parseInt(MAX_DELAY_MS, 10) || MIN_DELAY);
 
 const MIN_MSG_CHARS_INT = Math.max(0, parseInt(MIN_MSG_CHARS, 10) || 0);
 
+let lastQR = null;
+let lastQRAt = 0;
+const QR_TTL_MS = 120_000;
+
 /* =================== Estado =================== */
 let sock; // conexión Baileys
 let listeningEnabled = true;
@@ -273,6 +279,17 @@ async function start() {
 
   sock.ev.on("connection.update", async (u) => {
     const { connection, lastDisconnect, qr } = u;
+
+    if (qr) {
+      lastQR = qr;
+      lastQRAt = Date.now();
+      // Opcional: sigue imprimiéndolo en consola si quieres
+      // console.log(await QRCode.toString(qr, { type: 'terminal' }))
+      log.info(
+        "QR listo: abre /qr?token=<API_TOKEN> para escanear desde el navegador"
+      );
+    }
+
     if (qr) {
       qrcode.generate(qr, { small: true });
       log.info("Escanea el QR en WhatsApp > Dispositivos vinculados");
@@ -378,7 +395,8 @@ app.use(express.json());
 app.use((req, res, next) => {
   if (!API_TOKEN) return next();
   const hdr = req.get("authorization") || "";
-  const token = hdr.startsWith("Bearer ") ? hdr.slice(7) : "";
+  const urlToken = (req.query?.token || "").toString();
+  const token = hdr.startsWith("Bearer ") ? hdr.slice(7) : urlToken;
   if (token !== API_TOKEN)
     return res.status(401).json({ ok: false, error: "unauthorized" });
   next();
@@ -396,6 +414,64 @@ app.get("/status", (_req, res) => {
     blockNums: USE_BLOCK_NUMS,
     minMsgChars: MIN_MSG_CHARS_INT,
   });
+});
+
+app.get("/qr.png", async (_req, res) => {
+  if (!lastQR || Date.now() - lastQRAt > QR_TTL_MS) {
+    return res.status(404).send("QR no disponible (aún o expirado)");
+  }
+  try {
+    const png = await QRCode.toBuffer(lastQR, {
+      type: "png",
+      margin: 1,
+      width: 320,
+    });
+    res.setHeader("Content-Type", "image/png");
+    res.send(png);
+  } catch (e) {
+    res.status(500).send("Error generando QR");
+  }
+});
+
+app.get("/qr", (_req, res) => {
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  const hasQR = lastQR && Date.now() - lastQRAt <= QR_TTL_MS;
+  res.end(`<!doctype html><html><head>
+  <meta http-equiv="refresh" content="8">
+  <title>QR WhatsApp</title>
+  <style>
+    body{display:grid;place-items:center;height:100vh;background:#0b0b0b;color:#fff;font:16px system-ui;margin:0}
+    img{image-rendering:pixelated;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.6)}
+    p,small{opacity:.8}
+  </style>
+  </head><body>
+    <h1>Escanea el QR</h1>
+    ${
+      hasQR
+        ? `<img src="/qr.png?ts=${Date.now()}" alt="QR">`
+        : `<p>QR no disponible aún. Mantén esta página abierta, se actualiza cada 8s.</p>`
+    }
+    <small>TTL aprox: ${Math.floor(QR_TTL_MS / 1000)}s</small>
+  </body></html>`);
+});
+
+app.post("/pairing-code", async (req, res) => {
+  try {
+    if (!sock || typeof sock.requestPairingCode !== "function") {
+      return res.status(503).json({ ok: false, error: "socket no listo" });
+    }
+    const { phone } = req.body || {};
+    const num = (phone || "").toString().replace(/[^\d]/g, "");
+    if (!num)
+      return res
+        .status(400)
+        .json({ ok: false, error: "body.phone requerido en E.164 sin +" });
+    // Debe invocarse durante "connecting" o cuando haya evento de QR, ver docs
+    const code = await sock.requestPairingCode(num);
+    res.json({ ok: true, code });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e?.message });
+  }
 });
 
 app.post("/listener", (req, res) => {
