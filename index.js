@@ -281,6 +281,11 @@ async function start() {
     const { connection, lastDisconnect, qr } = u;
 
     if (qr) {
+      qrcode.generate(qr, { small: true });
+      log.info("Escanea el QR en WhatsApp > Dispositivos vinculados");
+    }
+
+    if (qr) {
       lastQR = qr;
       lastQRAt = Date.now();
       // Opcional: sigue imprimiéndolo en consola si quieres
@@ -288,11 +293,6 @@ async function start() {
       log.info(
         "QR listo: abre /qr?token=<API_TOKEN> para escanear desde el navegador"
       );
-    }
-
-    if (qr) {
-      qrcode.generate(qr, { small: true });
-      log.info("Escanea el QR en WhatsApp > Dispositivos vinculados");
     }
     if (connection === "open") {
       log.info("Conectado ✅");
@@ -433,9 +433,13 @@ app.get("/qr.png", async (_req, res) => {
   }
 });
 
-app.get("/qr", (_req, res) => {
+app.get("/qr", (req, res) => {
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   const hasQR = lastQR && Date.now() - lastQRAt <= QR_TTL_MS;
+  const hdr = req.get("authorization") || "";
+  const urlToken = (req.query?.token || "").toString();
+  const token = hdr.startsWith("Bearer ") ? hdr.slice(7) : urlToken;
+  const tokenQs = token ? `token=${encodeURIComponent(token)}&` : "";
   res.end(`<!doctype html><html><head>
   <meta http-equiv="refresh" content="8">
   <title>QR WhatsApp</title>
@@ -448,7 +452,7 @@ app.get("/qr", (_req, res) => {
     <h1>Escanea el QR</h1>
     ${
       hasQR
-        ? `<img src="/qr.png?ts=${Date.now()}" alt="QR">`
+        ? `<img src="/qr.png?${tokenQs}ts=${Date.now()}" alt="QR">`
         : `<p>QR no disponible aún. Mantén esta página abierta, se actualiza cada 8s.</p>`
     }
     <small>TTL aprox: ${Math.floor(QR_TTL_MS / 1000)}s</small>
