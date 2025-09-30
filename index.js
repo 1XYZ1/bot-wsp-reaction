@@ -498,4 +498,169 @@ app.get("/recent-senders", (_req, res) => {
   res.json({ ok: true, items: lastSenders });
 });
 
+// === ADMIN UI (activar/desactivar por UI) ===
+// Abre: http://HOST:3000/admin?token=<API_TOKEN>
+app.get("/admin", (req, res) => {
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.end(`<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>WA Bot · Admin</title>
+<style>
+  :root { color-scheme: dark; }
+  body{margin:0; font:16px system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", Arial; background:#0b0b0b; color:#eaeaea; }
+  .wrap{max-width:840px; margin:40px auto; padding:0 16px;}
+  h1{font-size:24px; margin:0 0 16px;}
+  .card{background:#121212; border:1px solid #222; border-radius:14px; padding:16px; margin:16px 0; box-shadow:0 8px 30px rgba(0,0,0,.35);}
+  button,.btn{cursor:pointer; border:0; border-radius:12px; padding:10px 14px; background:#1e88e5; color:#fff; font-weight:600}
+  button:disabled{opacity:.6; cursor:not-allowed}
+  .muted{opacity:.7}
+  pre{background:#0e0e0e; border:1px solid #222; border-radius:12px; padding:12px; overflow:auto;}
+  .row{display:flex; gap:10px; flex-wrap:wrap; align-items:center}
+  .pill{display:inline-block; padding:6px 10px; border-radius:999px; font-weight:600; font-size:13px;}
+  .ok{background:#17472e; color:#9cffc7; border:1px solid #1e5a39}
+  .err{background:#4a1b1b; color:#ffc0c0; border:1px solid #6b2323}
+  /* Toggle */
+  .switch{position:relative; display:inline-block; width:64px; height:34px; vertical-align:middle}
+  .switch input{display:none}
+  .slider{position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background:#333; transition:.2s; border-radius:999px; border:1px solid #444}
+  .slider:before{position:absolute; content:""; height:26px; width:26px; left:4px; bottom:3px; background:white; transition:.2s; border-radius:50%}
+  input:checked + .slider{background:#129b57}
+  input:checked + .slider:before{transform:translateX(28px)}
+  .foot{margin-top:18px; font-size:13px; opacity:.65}
+  .kbd{background:#222; border:1px solid #333; padding:2px 6px; border-radius:6px; font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;}
+  .grid{display:grid; grid-template-columns:1fr 1fr; gap:12px}
+  @media (max-width:700px){ .grid{grid-template-columns:1fr} }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>WhatsApp Bot · Panel</h1>
+
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <div>
+          <div style="font-weight:700; font-size:18px; margin-bottom:6px">Escucha del bot</div>
+          <div class="muted">Activa o desactiva sin reiniciar el proceso</div>
+        </div>
+        <label class="switch">
+          <input id="toggle" type="checkbox">
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button id="btnOn">Activar</button>
+        <button id="btnOff" class="btn" style="background:#9b1b1b">Desactivar</button>
+        <button id="btnReload" class="btn" style="background:#6b4bd9">Recargar grupos</button>
+        <a href="/qr" id="lnkQr" class="btn" style="background:#2a7f93; text-decoration:none" target="_blank" rel="noopener">Ver QR</a>
+      </div>
+      <div id="badge" class="pill ok" style="margin-top:12px">Cargando…</div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <div style="font-weight:700; font-size:18px; margin-bottom:6px">Estado</div>
+        <pre id="state">...</pre>
+      </div>
+      <div class="card">
+        <div style="font-weight:700; font-size:18px; margin-bottom:6px">Últimos remitentes</div>
+        <pre id="senders">...</pre>
+      </div>
+    </div>
+
+    <div class="foot">
+      Consejo: abre el panel con <span class="kbd">?token=&lt;API_TOKEN&gt;</span> la primera vez. El token se guarda localmente y la URL se limpia.
+    </div>
+  </div>
+
+<script>
+(function(){
+  // 1) Token: lee de query la primera vez, guarda en localStorage y limpia URL
+  const qs = new URLSearchParams(location.search)
+  const qTok = qs.get('token')
+  if (qTok) {
+    localStorage.setItem('apiToken', qTok)
+    history.replaceState(null, '', location.pathname)
+  }
+  const TOKEN = localStorage.getItem('apiToken') || ''
+
+  const $ = (s) => document.querySelector(s)
+  const toggle = $('#toggle')
+  const badge  = $('#badge')
+  const state  = $('#state')
+  const senders= $('#senders')
+  const btnOn  = $('#btnOn')
+  const btnOff = $('#btnOff')
+  const btnRel = $('#btnReload')
+  const lnkQr  = $('#lnkQr')
+
+  async function api(path, opts={}){
+    const headers = Object.assign(
+      { 'Content-Type': 'application/json' },
+      TOKEN ? { 'Authorization': 'Bearer ' + TOKEN } : {}
+    )
+    const r = await fetch(path, Object.assign({ headers }, opts))
+    if (!r.ok) throw new Error('HTTP ' + r.status)
+    return r.json()
+  }
+
+  function setBadge(on){
+    if (on) {
+      badge.className = 'pill ok'
+      badge.textContent = 'Escuchando: ACTIVADO'
+    } else {
+      badge.className = 'pill err'
+      badge.textContent = 'Escuchando: DESACTIVADO'
+    }
+    toggle.checked = !!on
+  }
+
+  async function load(){
+    try{
+      const s = await api('/status')
+      setBadge(!!s.listeningEnabled)
+      state.textContent = JSON.stringify(s, null, 2)
+
+      // últimos remitentes
+      try {
+        const rr = await api('/recent-senders')
+        senders.textContent = JSON.stringify(rr.items || [], null, 2)
+      } catch { senders.textContent = 'No disponible' }
+
+      // link QR con token como query por si el backend lo exige
+      const u = new URL('/qr', location.origin)
+      if (TOKEN) u.searchParams.set('token', TOKEN)
+      lnkQr.href = u.toString()
+    } catch(e){
+      setBadge(false)
+      state.textContent = 'Error: ' + e.message + '\\nRevisa el token y que el bot esté corriendo.'
+    }
+  }
+
+  async function setEnabled(v){
+    try{
+      await api('/listener', { method:'POST', body: JSON.stringify({ enabled: !!v }) })
+      await load()
+    } catch(e){
+      alert('Error: ' + e.message)
+    }
+  }
+
+  toggle.addEventListener('change', (e) => setEnabled(e.target.checked))
+  btnOn.addEventListener('click', () => setEnabled(true))
+  btnOff.addEventListener('click', () => setEnabled(false))
+  btnRel.addEventListener('click', async () => {
+    try { await api('/reload-groups', { method:'POST' }); await load() }
+    catch(e){ alert('Error: ' + e.message) }
+  })
+
+  load()
+})();
+</script>
+</body>
+</html>`);
+});
+
 app.listen(parseInt(PORT, 10), () => log.info(`HTTP :${PORT}`));
