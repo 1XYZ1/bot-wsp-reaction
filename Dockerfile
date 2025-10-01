@@ -1,35 +1,15 @@
-# Dockerfile optimizado para Railway
-FROM node:20-alpine
+FROM node:20-slim
 
-# Instalar dependencias del sistema necesarias para Baileys
-RUN apk add --no-cache \
-    python3 \
-    make \
-    g++ \
-    cairo-dev \
-    jpeg-dev \
-    pango-dev \
-    giflib-dev
+RUN apt-get update && apt-get install -y \
+    python3 build-essential \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-
-# Copiar package files
 COPY package*.json ./
-
-# Instalar dependencias (usar cache de npm)
-RUN npm ci --only=production --ignore-scripts && \
-    npm rebuild && \
-    npm cache clean --force
-
-# Copiar el resto del código
+RUN npm install --omit=dev
 COPY . .
-
-# Crear directorio de sesiones
 RUN mkdir -p sessions
 
-# Puerto por defecto de Railway
 ENV PORT=3000
 EXPOSE 3000
-
-# Comando de inicio
 CMD ["node", "index.js"]
