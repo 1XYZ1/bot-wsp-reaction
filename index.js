@@ -70,11 +70,9 @@ const digits = (s) => (s ?? "").replace(/[^\d]/g, "");
 const preview = (t, n = 80) =>
   t && t.length > n ? t.slice(0, n - 1) + "…" : t ?? "";
 
-// Normalizar un JID a su forma base (quita :device, homogeneiza dominio) - CON CACHÉ
+// Normalizar un JID a su forma base (quita :device, homogeneiza dominio)
 function normJid(jid) {
   if (!jid) return "";
-  if (jidCache.has(jid)) return jidCache.get(jid);
-
   const [userRaw, domainRaw] = jid.toLowerCase().split("@");
   const user = (userRaw || "").split(":")[0]; // quita sufijo de dispositivo
   // Mantén @lid si ya es lid; si es "whatsapp.net", homogeneiza a s.whatsapp.net
@@ -83,13 +81,7 @@ function normJid(jid) {
     : domainRaw === "whatsapp.net"
     ? "s.whatsapp.net"
     : domainRaw;
-  const result = domain ? `${user}@${domain}` : user;
-
-  // Cachear resultado
-  if (jidCache.size < JID_CACHE_MAX) {
-    jidCache.set(jid, result);
-  }
-  return result;
+  return domain ? `${user}@${domain}` : user;
 }
 
 // Extraer teléfono base (por si quieres usar fallback por número)
@@ -127,11 +119,7 @@ function getParticipantJid(msg) {
   );
 }
 
-/* =================== Cache y Configuración =================== */
-// ✅ Declarar el caché ANTES de usarlo (para que normJid() funcione)
-const jidCache = new Map();
-const JID_CACHE_MAX = 1000;
-
+/* =================== Configuración =================== */
 // Parseo de listas del .env
 const WANTED_GROUP_SUBS = GROUPS.split(",")
   .map((x) => fold(x.split("#")[0]))
@@ -376,7 +364,6 @@ app.get("/status", (_req, res) => {
     allowedJidsCount: ALLOWED_JIDS_SET.size,
     minMsgChars: MIN_MSG_CHARS_INT,
     reactedCacheSize: reacted.size,
-    jidCacheSize: jidCache.size,
   });
 });
 
@@ -724,8 +711,7 @@ app.get("/admin", (req, res) => {
       { label: 'Grupos activos', value: data.groupsActiveCount || 0 },
       { label: 'Whitelist JIDs', value: data.allowedJidsCount || 0 },
       { label: 'Min. caracteres', value: data.minMsgChars || 0 },
-      { label: 'Caché reacciones', value: data.reactedCacheSize || 0 },
-      { label: 'Caché JIDs', value: data.jidCacheSize || 0 }
+      { label: 'Caché reacciones', value: data.reactedCacheSize || 0 }
     ]
     infoGrid.innerHTML = items.map(i => \`
       <div class="info-item">
