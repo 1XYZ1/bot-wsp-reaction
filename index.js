@@ -127,6 +127,11 @@ function getParticipantJid(msg) {
   );
 }
 
+/* =================== Cache y Configuración =================== */
+// ✅ Declarar el caché ANTES de usarlo (para que normJid() funcione)
+const jidCache = new Map();
+const JID_CACHE_MAX = 1000;
+
 // Parseo de listas del .env
 const WANTED_GROUP_SUBS = GROUPS.split(",")
   .map((x) => fold(x.split("#")[0]))
@@ -155,10 +160,6 @@ const reacted = new Set(); // remoteJid::msgId (evitar duplicados)
 const REACTED_MAX_SIZE = 10000;
 let groupSubjects = new Map(); // remoteJid -> subject
 let allowedGroupJids = new Set();
-
-// Caché de normJid para optimización
-const jidCache = new Map();
-const JID_CACHE_MAX = 1000;
 
 // Registro simple de últimos remitentes (para ayudarte a copiar JIDs correctos)
 const lastSenders = []; // { jid, group, text, ts }
