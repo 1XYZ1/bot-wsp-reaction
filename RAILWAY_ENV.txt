@@ -1,0 +1,38 @@
+# =================== VARIABLES DE ENTORNO PARA RAILWAY ===================
+# Copia estas variables en tu proyecto de Railway
+
+# =================== OBLIGATORIAS ===================
+
+# Token de autenticación para el panel de admin
+# IMPORTANTE: Genera un token seguro
+API_TOKEN=cambia_esto_por_un_token_secreto
+
+# Grupos a monitorear (separados por comas, case-insensitive)
+# Ejemplo: GROUPS=Mi Grupo,Otro Grupo
+GROUPS=nombre_de_tu_grupo
+
+# =================== OPCIONALES (con valores por defecto) ===================
+
+# Logging (silent, error, warn, info, debug)
+LOG_LEVEL=info
+
+# Emoji de reacción
+EMOJI=👾
+
+# Delays en milisegundos (aleatorio entre min y max)
+MIN_DELAY_MS=100
+MAX_DELAY_MS=1000
+
+# Whitelist de JIDs permitidos (solo estos usuarios recibirán reacciones)
+# Ejemplo: ALLOWED_JIDS=5493816371665@s.whatsapp.net,5493816371666@s.whatsapp.net
+USE_ALLOWED_JIDS=false
+ALLOWED_JIDS=
+
+# Longitud mínima de mensaje para reaccionar (0 = deshabilitado)
+MIN_MSG_CHARS=0
+
+# Puerto del servidor web (Railway lo asigna automáticamente)
+PORT=3000
+
+# Directorio de sesión de WhatsApp
+SESSION_DIR=./sessions

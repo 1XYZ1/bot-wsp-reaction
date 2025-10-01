@@ -1,4 +1,26 @@
-sessions/
-*.log
+# Dependencies
+node_modules
+package-lock.json
+
+# Sessions (WhatsApp auth)
+sessions
+
+# Environment
 .env
-node_modules/
+.env.local
+.env.production
+
+# Logs
+*.log
+logs
+npm-debug.log*
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

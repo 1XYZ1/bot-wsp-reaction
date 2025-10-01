@@ -1,0 +1,30 @@
+# Node
+node_modules
+npm-debug.log
+yarn-error.log
+package-lock.json
+
+# Sessions (se crean en runtime)
+sessions
+
+# Git
+.git
+.gitignore
+
+# Env (Railway lo inyecta)
+.env
+.env.*
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs
