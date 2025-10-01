@@ -24,19 +24,11 @@ const {
   // Grupos: substring; insensible a mayúsculas/acentos
   GROUPS = "",
 
-  // Filtrado por JIDs (recomendado)
+  // Filtrado por JIDs (solo whitelist)
   USE_ALLOWED_JIDS = "false",
   ALLOWED_JIDS = "",
-  USE_BLOCKED_JIDS = "false",
-  BLOCKED_JIDS = "",
 
-  // Filtrado por números (respaldo) — se resolverán a JIDs en el arranque
-  USE_ALLOWED_NUMBERS = "false",
-  ALLOWED_NUMBERS = "",
-  USE_BLOCKED_NUMBERS = "false",
-  BLOCKED_NUMBERS = "",
-
-  //  min mensajes
+  // Min mensajes
   MIN_MSG_CHARS = "0",
 
   // HTTP
@@ -78,9 +70,11 @@ const digits = (s) => (s ?? "").replace(/[^\d]/g, "");
 const preview = (t, n = 80) =>
   t && t.length > n ? t.slice(0, n - 1) + "…" : t ?? "";
 
-// Normalizar un JID a su forma base (quita :device, homogeneiza dominio)
+// Normalizar un JID a su forma base (quita :device, homogeneiza dominio) - CON CACHÉ
 function normJid(jid) {
   if (!jid) return "";
+  if (jidCache.has(jid)) return jidCache.get(jid);
+
   const [userRaw, domainRaw] = jid.toLowerCase().split("@");
   const user = (userRaw || "").split(":")[0]; // quita sufijo de dispositivo
   // Mantén @lid si ya es lid; si es "whatsapp.net", homogeneiza a s.whatsapp.net
@@ -89,7 +83,13 @@ function normJid(jid) {
     : domainRaw === "whatsapp.net"
     ? "s.whatsapp.net"
     : domainRaw;
-  return domain ? `${user}@${domain}` : user;
+  const result = domain ? `${user}@${domain}` : user;
+
+  // Cachear resultado
+  if (jidCache.size < JID_CACHE_MAX) {
+    jidCache.set(jid, result);
+  }
+  return result;
 }
 
 // Extraer teléfono base (por si quieres usar fallback por número)
@@ -133,28 +133,9 @@ const WANTED_GROUP_SUBS = GROUPS.split(",")
   .filter(Boolean);
 
 const USE_ALLOW_JIDS = USE_ALLOWED_JIDS.toLowerCase() === "true";
-const USE_BLOCK_JIDS = USE_BLOCKED_JIDS.toLowerCase() === "true";
 const ALLOWED_JIDS_SET = new Set(
   ALLOWED_JIDS.split(",")
     .map((x) => normJid(x))
-    .filter(Boolean)
-);
-const BLOCKED_JIDS_SET = new Set(
-  BLOCKED_JIDS.split(",")
-    .map((x) => normJid(x))
-    .filter(Boolean)
-);
-
-const USE_ALLOW_NUMS = USE_ALLOWED_NUMBERS.toLowerCase() === "true";
-const USE_BLOCK_NUMS = USE_BLOCKED_NUMBERS.toLowerCase() === "true";
-const ALLOWED_NUMS_SET = new Set(
-  ALLOWED_NUMBERS.split(",")
-    .map((x) => digits(x))
-    .filter(Boolean)
-);
-const BLOCKED_NUMS_SET = new Set(
-  BLOCKED_NUMBERS.split(",")
-    .map((x) => digits(x))
     .filter(Boolean)
 );
 
@@ -171,12 +152,13 @@ const QR_TTL_MS = 120_000;
 let sock; // conexión Baileys
 let listeningEnabled = true;
 const reacted = new Set(); // remoteJid::msgId (evitar duplicados)
+const REACTED_MAX_SIZE = 10000;
 let groupSubjects = new Map(); // remoteJid -> subject
 let allowedGroupJids = new Set();
 
-// Resueltos: números -> JIDs (se rellena al abrir conexión)
-let RESOLVED_ALLOWED_JIDS = new Set();
-let RESOLVED_BLOCKED_JIDS = new Set();
+// Caché de normJid para optimización
+const jidCache = new Map();
+const JID_CACHE_MAX = 1000;
 
 // Registro simple de últimos remitentes (para ayudarte a copiar JIDs correctos)
 const lastSenders = []; // { jid, group, text, ts }
@@ -210,22 +192,14 @@ async function refreshAllowedGroups() {
   }
 }
 
-// Resolver números a JIDs (una vez conectados)
-async function resolvePhonesToJids(numbersSet) {
-  const output = new Set();
-  try {
-    if (!numbersSet?.size || typeof sock?.onWhatsApp !== "function")
-      return output;
-    // Intentamos consultar por "@s.whatsapp.net" (formato típico)
-    const queries = [...numbersSet].map((n) => `${n}@s.whatsapp.net`);
-    const results = await sock.onWhatsApp(queries); // devuelve array [{ exists, jid }, ...]
-    for (const r of Array.isArray(results) ? results : []) {
-      if (r?.exists && r?.jid) output.add(normJid(r.jid));
-    }
-  } catch (e) {
-    log.warn("No pude resolver números a JIDs:", e?.message);
+// Limpieza periódica del Set reacted para evitar memory leak
+function cleanReactedSet() {
+  if (reacted.size > REACTED_MAX_SIZE) {
+    const toKeep = [...reacted].slice(-5000); // Mantener últimos 5k
+    reacted.clear();
+    toKeep.forEach((k) => reacted.add(k));
+    log.debug(`🧹 Limpieza: reacted reducido a ${reacted.size}`);
   }
-  return output;
 }
 
 function rememberSender(jid, group, text) {
@@ -238,29 +212,11 @@ function rememberSender(jid, group, text) {
   if (lastSenders.length > 50) lastSenders.pop();
 }
 
-// Lógica de filtros priorizando JIDs (estable aun con @lid)
+// Lógica de filtros simplificada - solo whitelist de JIDs
 function passesSenderFilters(participantJid) {
+  if (!USE_ALLOW_JIDS) return true; // Si no está activo, permite todos
   const jid = normJid(participantJid);
-  const num = extractPhoneFromJid(participantJid);
-
-  // 1) JIDs primero (env + resueltos)
-  if (
-    USE_ALLOW_JIDS &&
-    !ALLOWED_JIDS_SET.has(jid) &&
-    !RESOLVED_ALLOWED_JIDS.has(jid)
-  )
-    return false;
-  if (
-    USE_BLOCK_JIDS &&
-    (BLOCKED_JIDS_SET.has(jid) || RESOLVED_BLOCKED_JIDS.has(jid))
-  )
-    return false;
-
-  // 2) Números como respaldo (si están activos)
-  if (USE_ALLOW_NUMS && !ALLOWED_NUMS_SET.has(num)) return false;
-  if (USE_BLOCK_NUMS && BLOCKED_NUMS_SET.has(num)) return false;
-
-  return true;
+  return ALLOWED_JIDS_SET.has(jid);
 }
 
 async function start() {
@@ -298,19 +254,8 @@ async function start() {
       log.info("Conectado ✅");
       await refreshAllowedGroups();
 
-      // Resolver listas por número -> JIDs (si están activas)
-      if (USE_ALLOW_NUMS && ALLOWED_NUMS_SET.size) {
-        RESOLVED_ALLOWED_JIDS = await resolvePhonesToJids(ALLOWED_NUMS_SET);
-        if (RESOLVED_ALLOWED_JIDS.size) {
-          log.info("ALLOW (nums→JIDs):", [...RESOLVED_ALLOWED_JIDS].join(", "));
-        }
-      }
-      if (USE_BLOCK_NUMS && BLOCKED_NUMS_SET.size) {
-        RESOLVED_BLOCKED_JIDS = await resolvePhonesToJids(BLOCKED_NUMS_SET);
-        if (RESOLVED_BLOCKED_JIDS.size) {
-          log.info("BLOCK (nums→JIDs):", [...RESOLVED_BLOCKED_JIDS].join(", "));
-        }
-      }
+      // Iniciar limpieza periódica del Set reacted
+      setInterval(cleanReactedSet, 60000); // Cada minuto
     }
     if (connection === "close") {
       const code = lastDisconnect?.error?.output?.statusCode;
@@ -327,58 +272,62 @@ async function start() {
 
   sock.ev.on("messages.upsert", async ({ type, messages }) => {
     if (type !== "notify" || !Array.isArray(messages)) return;
-    for (const msg of messages) {
-      try {
-        const { key } = msg;
-        const remoteJid = key?.remoteJid;
-        const msgId = key?.id;
-        const fromMe = key?.fromMe;
-        if (!remoteJid || !msgId || fromMe) continue;
-        if (!listeningEnabled) continue;
-        if (!allowedGroupJids.has(remoteJid)) continue;
 
-        // Participant (varias rutas)
-        const participant = getParticipantJid(msg);
-        if (!participant) continue;
+    // ✅ PROCESAMIENTO PARALELO: todos los mensajes se procesan simultáneamente
+    await Promise.allSettled(
+      messages.map(async (msg) => {
+        try {
+          const { key } = msg;
+          const remoteJid = key?.remoteJid;
+          const msgId = key?.id;
+          const fromMe = key?.fromMe;
+          if (!remoteJid || !msgId || fromMe) return;
+          if (!listeningEnabled) return;
+          if (!allowedGroupJids.has(remoteJid)) return;
 
-        const groupName = groupSubjects.get(remoteJid) || "(grupo)";
-        const text = getMessageText(msg);
-        rememberSender(participant, groupName, text);
+          // Participant (varias rutas)
+          const participant = getParticipantJid(msg);
+          if (!participant) return;
 
-        // ⬇️ NUEVO: ignora mensajes demasiado cortos
-        if (text.length < MIN_MSG_CHARS_INT) {
-          log.info(
-            `⛔ Ignorado por longitud (${text.length} < ${MIN_MSG_CHARS_INT})`
-          );
-          continue;
+          const groupName = groupSubjects.get(remoteJid) || "(grupo)";
+          const text = getMessageText(msg);
+          rememberSender(participant, groupName, text);
+
+          // Ignora mensajes demasiado cortos
+          if (text.length < MIN_MSG_CHARS_INT) {
+            log.info(
+              `⛔ Ignorado por longitud (${text.length} < ${MIN_MSG_CHARS_INT})`
+            );
+            return;
+          }
+
+          // Log de entrada minimalista
+          const prettyNum = "+" + extractPhoneFromJid(participant);
+          log.info(`👤 ${prettyNum}  #${groupName}  →  "${preview(text)}"`);
+
+          // Filtros
+          if (!passesSenderFilters(participant)) {
+            log.info("⛔ Ignorado por filtros");
+            return;
+          }
+
+          // Evitar duplicado - marcar ANTES del sleep para evitar race conditions
+          const k = `${remoteJid}::${msgId}`;
+          if (reacted.has(k)) return;
+          reacted.add(k); // ✅ Movido ANTES del sleep
+
+          // Delay aleatorio y reacción
+          const delay = rand(MIN_DELAY, MAX_DELAY);
+          await sleep(delay);
+          await sock.sendMessage(remoteJid, { react: { text: EMOJI, key } });
+
+          log.info(`✅ React ${EMOJI} en ${delay}ms`);
+          log.debug("jid=", normJid(participant));
+        } catch (e) {
+          log.error("Error procesando msg:", e?.message);
         }
-
-        // Log de entrada minimalista
-        const prettyNum = "+" + extractPhoneFromJid(participant);
-        log.info(`👤 ${prettyNum}  #${groupName}  →  "${preview(text)}"`);
-
-        // Filtros
-        if (!passesSenderFilters(participant)) {
-          log.info("⛔ Ignorado por filtros");
-          continue;
-        }
-
-        // Evitar duplicado
-        const k = `${remoteJid}::${msgId}`;
-        if (reacted.has(k)) continue;
-
-        // Delay aleatorio y reacción
-        const delay = rand(MIN_DELAY, MAX_DELAY);
-        await sleep(delay);
-        await sock.sendMessage(remoteJid, { react: { text: EMOJI, key } });
-        reacted.add(k);
-
-        log.info(`✅ React ${EMOJI} en ${delay}ms`);
-        log.debug("jid=", normJid(participant));
-      } catch (e) {
-        log.error("Error procesando msg:", e?.message);
-      }
-    }
+      })
+    );
   });
 }
 
@@ -391,16 +340,30 @@ start().catch((e) => {
 const app = express();
 app.use(express.json());
 
-// Auth básica Bearer (opcional si API_TOKEN vacío)
-app.use((req, res, next) => {
+// Middleware de autenticación (excluye /admin y /qr para permitir acceso con localStorage)
+function authMiddleware(req, res, next) {
+  // Si no hay API_TOKEN configurado, permite todo
   if (!API_TOKEN) return next();
+
+  // Permite acceso directo a páginas HTML (se autenticarán desde el cliente)
+  if (req.path === "/admin" || req.path === "/qr" || req.path === "/qr.png") {
+    // Para estas rutas, verificar token solo si viene en la URL (primera vez)
+    const urlToken = (req.query?.token || "").toString();
+    if (!urlToken) return next(); // Sin token en URL = viene de localStorage
+    if (urlToken === API_TOKEN) return next(); // Token válido en URL
+    return res.status(401).json({ ok: false, error: "unauthorized" });
+  }
+
+  // Para APIs REST, verificar token en header o query
   const hdr = req.get("authorization") || "";
   const urlToken = (req.query?.token || "").toString();
   const token = hdr.startsWith("Bearer ") ? hdr.slice(7) : urlToken;
   if (token !== API_TOKEN)
     return res.status(401).json({ ok: false, error: "unauthorized" });
   next();
-});
+}
+
+app.use(authMiddleware);
 
 app.get("/status", (_req, res) => {
   res.json({
@@ -409,10 +372,10 @@ app.get("/status", (_req, res) => {
     groupsConfigured: WANTED_GROUP_SUBS,
     groupsActiveCount: allowedGroupJids.size,
     allowJids: USE_ALLOW_JIDS,
-    blockJids: USE_BLOCK_JIDS,
-    allowNums: USE_ALLOW_NUMS,
-    blockNums: USE_BLOCK_NUMS,
+    allowedJidsCount: ALLOWED_JIDS_SET.size,
     minMsgChars: MIN_MSG_CHARS_INT,
+    reactedCacheSize: reacted.size,
+    jidCacheSize: jidCache.size,
   });
 });
 
@@ -489,16 +452,11 @@ app.post("/listener", (req, res) => {
   res.json({ ok: true, listeningEnabled });
 });
 
-app.post("/reload-groups", async (_req, res) => {
-  await refreshAllowedGroups();
-  res.json({ ok: true, groupsActiveCount: allowedGroupJids.size });
-});
-
 app.get("/recent-senders", (_req, res) => {
   res.json({ ok: true, items: lastSenders });
 });
 
-// === ADMIN UI (activar/desactivar por UI) ===
+// === ADMIN UI (Panel de control simplificado) ===
 // Abre: http://HOST:3000/admin?token=<API_TOKEN>
 app.get("/admin", (req, res) => {
   res.setHeader("Content-Type", "text/html; charset=utf-8");
@@ -507,77 +465,221 @@ app.get("/admin", (req, res) => {
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Skins Fornite · Free</title>
+<title>Panel Bot WhatsApp</title>
 <style>
   :root { color-scheme: dark; }
-  body{margin:0; font:16px system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", Arial; background:#0b0b0b; color:#eaeaea; }
-  .wrap{max-width:840px; margin:40px auto; padding:0 16px;}
-  h1{font-size:24px; margin:0 0 16px;}
-  .card{background:#121212; border:1px solid #222; border-radius:14px; padding:16px; margin:16px 0; box-shadow:0 8px 30px rgba(0,0,0,.35);}
-  button,.btn{cursor:pointer; border:0; border-radius:12px; padding:10px 14px; background:#1e88e5; color:#fff; font-weight:600}
-  button:disabled{opacity:.6; cursor:not-allowed}
-  .muted{opacity:.7}
-  pre{background:#0e0e0e; border:1px solid #222; border-radius:12px; padding:12px; overflow:auto;}
-  .row{display:flex; gap:10px; flex-wrap:wrap; align-items:center}
-  .pill{display:inline-block; padding:6px 10px; border-radius:999px; font-weight:600; font-size:13px;}
-  .ok{background:#17472e; color:#9cffc7; border:1px solid #1e5a39}
-  .err{background:#4a1b1b; color:#ffc0c0; border:1px solid #6b2323}
-  /* Toggle */
-  .switch{position:relative; display:inline-block; width:64px; height:34px; vertical-align:middle}
-  .switch input{display:none}
-  .slider{position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background:#333; transition:.2s; border-radius:999px; border:1px solid #444}
-  .slider:before{position:absolute; content:""; height:26px; width:26px; left:4px; bottom:3px; background:white; transition:.2s; border-radius:50%}
-  input:checked + .slider{background:#129b57}
-  input:checked + .slider:before{transform:translateX(28px)}
-  .foot{margin-top:18px; font-size:13px; opacity:.65}
-  .kbd{background:#222; border:1px solid #333; padding:2px 6px; border-radius:6px; font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;}
-  .grid{display:grid; grid-template-columns:1fr 1fr; gap:12px}
-  @media (max-width:700px){ .grid{grid-template-columns:1fr} }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font: 16px system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    background: linear-gradient(135deg, #0a0a0a 0%, #1a1a2e 100%);
+    color: #eaeaea;
+    min-height: 100vh;
+  }
+  .wrap {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 24px 16px;
+  }
+  h1 {
+    font-size: 28px;
+    font-weight: 700;
+    margin: 0 0 8px;
+    background: linear-gradient(135deg, #60a5fa 0%, #34d399 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .subtitle {
+    color: #9ca3af;
+    font-size: 14px;
+    margin-bottom: 32px;
+  }
+  .card {
+    background: rgba(17, 24, 39, 0.8);
+    border: 1px solid rgba(75, 85, 99, 0.3);
+    border-radius: 16px;
+    padding: 24px;
+    margin: 16px 0;
+    backdrop-filter: blur(10px);
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+  }
+  .card-title {
+    font-weight: 700;
+    font-size: 18px;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 20px;
+    border-radius: 12px;
+    font-weight: 600;
+    font-size: 15px;
+    margin: 16px 0;
+    transition: all 0.3s ease;
+  }
+  .status-badge.active {
+    background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+    color: white;
+    box-shadow: 0 4px 20px rgba(16, 185, 129, 0.4);
+  }
+  .status-badge.inactive {
+    background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+    color: white;
+    box-shadow: 0 4px 20px rgba(239, 68, 68, 0.4);
+  }
+  .status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: white;
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+  .btn-group {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: 16px;
+  }
+  button, .btn {
+    cursor: pointer;
+    border: 0;
+    border-radius: 12px;
+    padding: 12px 24px;
+    font-weight: 600;
+    font-size: 15px;
+    transition: all 0.2s ease;
+    text-decoration: none;
+    display: inline-block;
+  }
+  button:hover, .btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+  }
+  button:active, .btn:active {
+    transform: translateY(0);
+  }
+  .btn-success {
+    background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+    color: white;
+  }
+  .btn-danger {
+    background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+    color: white;
+  }
+  .btn-info {
+    background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+    color: white;
+  }
+  pre {
+    background: #0a0a0a;
+    border: 1px solid rgba(75, 85, 99, 0.3);
+    border-radius: 12px;
+    padding: 16px;
+    overflow: auto;
+    font-size: 13px;
+    line-height: 1.6;
+    max-height: 300px;
+  }
+  .info-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 12px;
+    margin-top: 16px;
+  }
+  .info-item {
+    background: rgba(30, 41, 59, 0.6);
+    padding: 12px;
+    border-radius: 10px;
+    border-left: 3px solid #3b82f6;
+  }
+  .info-label {
+    font-size: 12px;
+    color: #9ca3af;
+    margin-bottom: 4px;
+  }
+  .info-value {
+    font-size: 16px;
+    font-weight: 700;
+    color: #60a5fa;
+  }
+  .sender-item {
+    background: rgba(30, 41, 59, 0.4);
+    padding: 12px;
+    border-radius: 8px;
+    margin-bottom: 8px;
+    border-left: 3px solid #34d399;
+  }
+  .sender-jid {
+    font-weight: 600;
+    color: #34d399;
+    font-size: 14px;
+  }
+  .sender-text {
+    color: #d1d5db;
+    font-size: 13px;
+    margin-top: 4px;
+  }
+  .footer {
+    margin-top: 32px;
+    text-align: center;
+    font-size: 13px;
+    color: #6b7280;
+  }
+  @media (max-width: 700px) {
+    .info-grid { grid-template-columns: 1fr; }
+  }
 </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>Skins Fornite · Free</h1>
+    <h1>🤖 Panel de Control WhatsApp Bot</h1>
+    <div class="subtitle">Gestiona tu bot de reacciones automáticas</div>
 
     <div class="card">
-      <div class="row" style="justify-content:space-between">
-        <div>
-          <div style="font-weight:700; font-size:18px; margin-bottom:6px">Escucha del bot</div>
-          <div class="muted">Activa o desactiva sin reiniciar el proceso</div>
+      <div class="card-title">⚡ Control del Bot</div>
+      <div id="badge" class="status-badge active">
+        <span class="status-dot"></span>
+        <span id="statusText">Cargando...</span>
+      </div>
+      <div class="btn-group">
+        <button id="btnOn" class="btn-success">▶ Activar Bot</button>
+        <button id="btnOff" class="btn-danger">⏸ Desactivar Bot</button>
+        <a href="/qr" id="lnkQr" class="btn btn-info" target="_blank" rel="noopener">📱 Ver QR</a>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">📊 Información del Sistema</div>
+      <div class="info-grid" id="infoGrid">
+        <div class="info-item">
+          <div class="info-label">Estado</div>
+          <div class="info-value">...</div>
         </div>
-        <label class="switch">
-          <input id="toggle" type="checkbox">
-          <span class="slider"></span>
-        </label>
-      </div>
-      <div class="row" style="margin-top:12px">
-        <button id="btnOn">Activar</button>
-        <button id="btnOff" class="btn" style="background:#9b1b1b">Desactivar</button>
-        <button id="btnReload" class="btn" style="background:#6b4bd9">Recargar grupos</button>
-        <a href="/qr" id="lnkQr" class="btn" style="background:#2a7f93; text-decoration:none" target="_blank" rel="noopener">Ver QR</a>
-      </div>
-      <div id="badge" class="pill ok" style="margin-top:12px">Cargando…</div>
-    </div>
-
-    <div class="grid">
-      <div class="card">
-        <div style="font-weight:700; font-size:18px; margin-bottom:6px">Estado</div>
-        <pre id="state">...</pre>
-      </div>
-      <div class="card">
-        <div style="font-weight:700; font-size:18px; margin-bottom:6px">Últimos remitentes</div>
-        <pre id="senders">...</pre>
       </div>
     </div>
 
-    <div class="foot">
-      Consejo: abre el panel con <span class="kbd">?token=&lt;API_TOKEN&gt;</span> la primera vez. El token se guarda localmente y la URL se limpia.
+    <div class="card">
+      <div class="card-title">👥 Últimos Remitentes</div>
+      <div id="senders">Cargando...</div>
+    </div>
+
+    <div class="footer">
+      💡 Tip: Usa <strong>?token=TU_API_TOKEN</strong> en la URL la primera vez
     </div>
   </div>
 
 <script>
 (function(){
-  // 1) Token: lee de query la primera vez, guarda en localStorage y limpia URL
   const qs = new URLSearchParams(location.search)
   const qTok = qs.get('token')
   if (qTok) {
@@ -587,76 +689,117 @@ app.get("/admin", (req, res) => {
   const TOKEN = localStorage.getItem('apiToken') || ''
 
   const $ = (s) => document.querySelector(s)
-  const toggle = $('#toggle')
-  const badge  = $('#badge')
-  const state  = $('#state')
-  const senders= $('#senders')
-  const btnOn  = $('#btnOn')
+  const badge = $('#badge')
+  const statusText = $('#statusText')
+  const infoGrid = $('#infoGrid')
+  const senders = $('#senders')
+  const btnOn = $('#btnOn')
   const btnOff = $('#btnOff')
-  const btnRel = $('#btnReload')
-  const lnkQr  = $('#lnkQr')
+  const lnkQr = $('#lnkQr')
 
   async function api(path, opts={}){
-    const headers = Object.assign(
-      { 'Content-Type': 'application/json' },
-      TOKEN ? { 'Authorization': 'Bearer ' + TOKEN } : {}
-    )
-    const r = await fetch(path, Object.assign({ headers }, opts))
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(TOKEN ? { 'Authorization': 'Bearer ' + TOKEN } : {})
+    }
+    const r = await fetch(path, { ...opts, headers })
     if (!r.ok) throw new Error('HTTP ' + r.status)
     return r.json()
   }
 
-  function setBadge(on){
-    if (on) {
-      badge.className = 'pill ok'
-      badge.textContent = 'Escuchando: ACTIVADO'
+  function setStatus(enabled){
+    if (enabled) {
+      badge.className = 'status-badge active'
+      statusText.textContent = '✓ Bot Activo - Escuchando mensajes'
     } else {
-      badge.className = 'pill err'
-      badge.textContent = 'Escuchando: DESACTIVADO'
+      badge.className = 'status-badge inactive'
+      statusText.textContent = '✗ Bot Inactivo - Pausado'
     }
-    toggle.checked = !!on
+  }
+
+  function renderInfo(data){
+    const items = [
+      { label: 'Estado', value: data.listeningEnabled ? '✓ Activo' : '✗ Inactivo' },
+      { label: 'Grupos activos', value: data.groupsActiveCount || 0 },
+      { label: 'Whitelist JIDs', value: data.allowedJidsCount || 0 },
+      { label: 'Min. caracteres', value: data.minMsgChars || 0 },
+      { label: 'Caché reacciones', value: data.reactedCacheSize || 0 },
+      { label: 'Caché JIDs', value: data.jidCacheSize || 0 }
+    ]
+    infoGrid.innerHTML = items.map(i => \`
+      <div class="info-item">
+        <div class="info-label">\${i.label}</div>
+        <div class="info-value">\${i.value}</div>
+      </div>
+    \`).join('')
+  }
+
+  function renderSenders(items){
+    if (!items || !items.length) {
+      senders.innerHTML = '<div style="color:#6b7280">No hay remitentes recientes</div>'
+      return
+    }
+    senders.innerHTML = items.slice(0, 10).map(s => \`
+      <div class="sender-item">
+        <div class="sender-jid">\${s.jid}</div>
+        <div class="sender-text">\${s.text || '(sin texto)'}</div>
+        <div style="font-size:11px;color:#6b7280;margin-top:4px">
+          Grupo: \${s.group || 'N/A'}
+        </div>
+      </div>
+    \`).join('')
   }
 
   async function load(){
-    try{
+    try {
       const s = await api('/status')
-      setBadge(!!s.listeningEnabled)
-      state.textContent = JSON.stringify(s, null, 2)
+      setStatus(s.listeningEnabled)
+      renderInfo(s)
 
-      // últimos remitentes
       try {
         const rr = await api('/recent-senders')
-        senders.textContent = JSON.stringify(rr.items || [], null, 2)
-      } catch { senders.textContent = 'No disponible' }
+        renderSenders(rr.items)
+      } catch {
+        senders.innerHTML = '<div style="color:#ef4444">Error cargando remitentes</div>'
+      }
 
-      // link QR con token como query por si el backend lo exige
       const u = new URL('/qr', location.origin)
       if (TOKEN) u.searchParams.set('token', TOKEN)
       lnkQr.href = u.toString()
-    } catch(e){
-      setBadge(false)
-      state.textContent = 'Error: ' + e.message + '\\nRevisa el token y que el bot esté corriendo.'
+    } catch(e) {
+      setStatus(false)
+      if (e.message.includes('401')) {
+        infoGrid.innerHTML = '<div style="color:#ef4444">⚠️ Token inválido o faltante<br><br>Añade <strong>?token=TU_API_TOKEN</strong> a la URL y recarga la página.</div>'
+      } else {
+        infoGrid.innerHTML = '<div style="color:#ef4444">Error: ' + e.message + '<br><br>Verifica que el bot esté corriendo.</div>'
+      }
     }
   }
 
   async function setEnabled(v){
-    try{
-      await api('/listener', { method:'POST', body: JSON.stringify({ enabled: !!v }) })
+    try {
+      await api('/listener', {
+        method: 'POST',
+        body: JSON.stringify({ enabled: !!v })
+      })
       await load()
-    } catch(e){
+    } catch(e) {
       alert('Error: ' + e.message)
     }
   }
 
-  toggle.addEventListener('change', (e) => setEnabled(e.target.checked))
   btnOn.addEventListener('click', () => setEnabled(true))
   btnOff.addEventListener('click', () => setEnabled(false))
-  btnRel.addEventListener('click', async () => {
-    try { await api('/reload-groups', { method:'POST' }); await load() }
-    catch(e){ alert('Error: ' + e.message) }
-  })
+
+  // Mostrar aviso si no hay token guardado
+  if (!TOKEN) {
+    statusText.textContent = '⚠️ Token no configurado'
+    badge.className = 'status-badge inactive'
+    infoGrid.innerHTML = '<div style="color:#f59e0b; padding: 12px; background: rgba(245, 158, 11, 0.1); border-radius: 8px;"><strong>⚠️ Primer acceso detectado</strong><br><br>Añade <strong>?token=TU_API_TOKEN</strong> a la URL y recarga la página para guardar el token en tu navegador.</div>'
+  }
 
   load()
+  setInterval(load, 5000) // Auto-refresh cada 5 segundos
 })();
 </script>
 </body>
