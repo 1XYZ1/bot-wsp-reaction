@@ -2,7 +2,7 @@
 node_modules
 npm-debug.log
 yarn-error.log
-package-lock.json
+# package-lock.json es NECESARIO para npm ci - NO excluir
 
 # Sessions (se crean en runtime)
 sessions
