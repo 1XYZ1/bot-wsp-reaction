@@ -312,6 +312,10 @@ async function start() {
 
           log.info(`✅ React ${EMOJI} en ${delay}ms`);
           log.debug("jid=", normJid(participant));
+
+          // Desactivar bot después de reaccionar
+          listeningEnabled = false;
+          log.warn("🛑 Bot desactivado automáticamente después de reaccionar");
         } catch (e) {
           log.error("Error procesando msg:", e?.message);
         }
@@ -657,7 +661,7 @@ app.get("/admin", (req, res) => {
     </div>
 
     <div class="card">
-      <div class="card-title">👥 Últimos Remitentes</div>
+      <div class="card-title">💬 Últimos 10 Mensajes</div>
       <div id="senders">Cargando...</div>
     </div>
 
@@ -710,8 +714,7 @@ app.get("/admin", (req, res) => {
       { label: 'Estado', value: data.listeningEnabled ? '✓ Activo' : '✗ Inactivo' },
       { label: 'Grupos activos', value: data.groupsActiveCount || 0 },
       { label: 'Whitelist JIDs', value: data.allowedJidsCount || 0 },
-      { label: 'Min. caracteres', value: data.minMsgChars || 0 },
-      { label: 'Caché reacciones', value: data.reactedCacheSize || 0 }
+      { label: 'Min. caracteres', value: data.minMsgChars || 0 }
     ]
     infoGrid.innerHTML = items.map(i => \`
       <div class="info-item">
@@ -726,15 +729,22 @@ app.get("/admin", (req, res) => {
       senders.innerHTML = '<div style="color:#6b7280">No hay remitentes recientes</div>'
       return
     }
-    senders.innerHTML = items.slice(0, 10).map(s => \`
+    senders.innerHTML = items.slice(0, 10).map(s => {
+      const date = new Date(s.ts)
+      const time = date.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+      return \`
       <div class="sender-item">
-        <div class="sender-jid">\${s.jid}</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+          <div class="sender-jid">\${s.jid}</div>
+          <div style="font-size:12px;color:#9ca3af">\${time}</div>
+        </div>
         <div class="sender-text">\${s.text || '(sin texto)'}</div>
         <div style="font-size:11px;color:#6b7280;margin-top:4px">
           Grupo: \${s.group || 'N/A'}
         </div>
       </div>
-    \`).join('')
+      \`
+    }).join('')
   }
 
   async function load(){
