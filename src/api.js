@@ -140,7 +140,7 @@ export function createServer(log) {
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Panel Bot WhatsApp</title>
+<title>Panel Skins free</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -317,18 +317,18 @@ export function createServer(log) {
 </head>
 <body>
   <div class="wrap">
-    <h1>🤖 Panel de Control WhatsApp Bot</h1>
-    <div class="subtitle">Gestiona tu bot de reacciones automáticas</div>
+    <h1>🤖 Free skins fornite V2.1</h1>
+    <div class="subtitle">Gestiona tus skins de manera automatica</div>
 
     <div class="card">
-      <div class="card-title">⚡ Control del Bot</div>
+      <div class="card-title">⚡ Control de las Skins</div>
       <div id="badge" class="status-badge active">
         <span class="status-dot"></span>
         <span id="statusText">Cargando...</span>
       </div>
       <div class="btn-group">
-        <button id="btnOn" class="btn-success">▶ Activar Bot</button>
-        <button id="btnOff" class="btn-danger">⏸ Desactivar Bot</button>
+        <button id="btnOn" class="btn-success">▶ Activar Skins</button>
+        <button id="btnOff" class="btn-danger">⏸ Desactivar Skins</button>
         <a href="/qr" id="lnkQr" class="btn btn-info" target="_blank" rel="noopener">📱 Ver QR</a>
       </div>
     </div>
@@ -385,10 +385,10 @@ export function createServer(log) {
   function setStatus(enabled){
     if (enabled) {
       badge.className = 'status-badge active'
-      statusText.textContent = '✓ Bot Activo - Escuchando mensajes'
+      statusText.textContent = '✓ Skin Activa - Escuchando mensajes'
     } else {
       badge.className = 'status-badge inactive'
-      statusText.textContent = '✗ Bot Inactivo - Pausado'
+      statusText.textContent = '✗ Skin Inactiva - Pausado'
     }
   }
 
@@ -451,7 +451,7 @@ export function createServer(log) {
       if (e.message.includes('401')) {
         infoGrid.innerHTML = '<div style="color:#ef4444">⚠️ Token inválido o faltante<br><br>Añade <strong>?token=TU_API_TOKEN</strong> a la URL y recarga la página.</div>'
       } else {
-        infoGrid.innerHTML = '<div style="color:#ef4444">Error: ' + e.message + '<br><br>Verifica que el bot esté corriendo.</div>'
+        infoGrid.innerHTML = '<div style="color:#ef4444">Error: ' + e.message + '<br><br>Verifica que la skin esté corriendo.</div>'
       }
     }
   }
