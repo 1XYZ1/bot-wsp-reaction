@@ -110,6 +110,30 @@ Para ignorar mensajes muy cortos:
 MIN_MSG_CHARS=10
 ```
 
+## 📁 Estructura del Proyecto
+
+El proyecto está organizado en módulos para mejor mantenibilidad:
+
+```
+wa-bot/
+├── index.js          # Punto de entrada principal
+├── src/
+│   ├── logger.js     # Sistema de logging
+│   ├── config.js     # Configuración y variables de entorno
+│   ├── utils.js      # Funciones utilitarias
+│   ├── state.js      # Estado global del bot
+│   ├── filters.js    # Lógica de filtros
+│   ├── whatsapp.js   # Conexión Baileys y mensajes
+│   ├── api.js        # Servidor Express y endpoints
+│   └── README.md     # Documentación detallada de módulos
+├── sessions/         # Datos de sesión de WhatsApp
+├── package.json
+├── Dockerfile
+└── railway.json
+```
+
+Ver [src/README.md](src/README.md) para documentación detallada de cada módulo.
+
 ## 🛠️ Tecnologías
 
 - [Baileys](https://github.com/WhiskeySockets/Baileys) - WhatsApp Web API
